@@ -1,8 +1,16 @@
 const CACHE = "pool-tracker-v1";
-const ASSETS = ["/", "/index.html", "/manifest.json"];
+// Only cache same-origin assets — CDN URLs are cross-origin and will fail addAll
+const ASSETS = ["/pool-tracker/", "/pool-tracker/index.html", "/pool-tracker/manifest.json",
+                "/pool-tracker/icon-192.png", "/pool-tracker/icon-512.png"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
+  e.waitUntil(
+    caches.open(CACHE).then((c) =>
+      Promise.all(ASSETS.map(url =>
+        c.add(url).catch(() => {}) // ignore individual failures
+      ))
+    )
+  );
   self.skipWaiting();
 });
 
