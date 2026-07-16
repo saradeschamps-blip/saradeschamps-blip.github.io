@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Pool" />
+  <meta name="theme-color" content="#0B2027" />
+  <title>Pool Tracker</title>
+  <link rel="manifest" href="manifest.json" />
+  <!-- Apple touch icon (inline SVG fallback — replace with real PNGs if desired) -->
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { background: #0B2027; color: #EAF6F6; -webkit-tap-highlight-color: transparent; }
+    input, button, textarea, select { font: inherit; color: inherit; background: none; border: none; }
+    button { cursor: pointer; }
+    /* safe-area insets for iPhone notch / home bar */
+    #root { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- CDN deps — cached by service worker after first load -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script crossorigin src="https://unpkg.com/lucide-react@0.395.0/dist/umd/lucide-react.min.js"></script>
+
+<script>
+"use strict";
+
+// ---- shims so the app code can use these globals directly ----
+const { useState, useEffect, useMemo } = React;
+const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea } = Recharts;
+const { Droplets, FlaskConical, Plus, X, Trash2, Settings2, ChevronRight,
+        AlertTriangle, CheckCircle2, Waves, ListPlus } = lucide;
+
+// ---- design tokens ----
+const C = {
+  bg: "#0B2027", card: "#123138", border: "#1B3E45",
+  text: "#EAF6F6", muted: "#7FA8AA", faint: "#5E8688", accent: "#4FD1C5",
+  danger: "#E8583F", dangerBg: "#2A1A18", dangerBorder: "#5C2E28",
+  goodBg: "#122B22", goodBorder: "#215239",
+  warn: "#F4CD46", warnBg: "#2A2418", warnBorder: "#5C4E28",
+};
+const FONT_DISPLAY = "'Space Grotesk', sans-serif";
+const FONT_MONO    = "'IBM Plex Mono', monospace";
+const FONT_BODY    = "'IBM Plex Sans', sans-serif";
+
+const GLOBAL_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap');
+.pd-input:focus { outline: none; border-color: ${C.accent} !important; }
+.pd-icon-btn:hover { background: ${C.card}; }
+.pd-delete:hover { color: ${C.danger} !important; }
+.pd-btn-primary:active { transform: scale(0.98); }
+.pd-pill { transition: background-color .15s, border-color .15s, color .15s; }
+@keyframes pd-fade-in  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@keyframes pd-fade-out { from { opacity:1; } to { opacity:0; } }
+.pd-toast { animation: pd-fade-in .2s ease forwards; }
+/* flex/grid utilities (Tailwind-like, no build needed) */
+.flex          { display: flex; }
+.flex-col      { flex-direction: column; }
+.flex-wrap     { flex-wrap: wrap; }
+.items-center  { align-items: center; }
+.items-start   { align-items: flex-start; }
+.justify-center{ justify-content: center; }
+.justify-between{ justify-content: space-between; }
+.gap-1         { gap: 4px; }
+.gap-2         { gap: 8px; }
+.gap-3         { gap: 12px; }
+.shrink-0      { flex-shrink: 0; }
+.sticky        { position: sticky; }
+.top-0         { top: 0; }
+.bottom-0      { bottom: 0; }
+.z-20          { z-index: 20; }
+.grid          { display: grid; }
+.grid-cols-2   { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.max-w-md      { max-width: 448px; }
+.mx-auto       { margin-left: auto; margin-right: auto; }
+.w-full        { width: 100%; }
+`;
+
+const PARAM_DEFS = [
+  { key:"fc",   label:"Free Chlorine",     short:"FC",   unit:"ppm", chip:"#F4CD46", step:0.5, min:0,  max:20   },
+  { key:"cc",   label:"Combined Chlorine", short:"CC",   unit:"ppm", chip:"#F4CD46", step:0.1, min:0,  max:5,   infoOnly:true },
+  { key:"ph",   label:"pH",                short:"pH",   unit:"",    chip:"#E8583F", step:0.1, min:6,  max:9    },
+  { key:"ta",   label:"Total Alkalinity",  short:"TA",   unit:"ppm", chip:"#48C9B0", step:5,   min:0,  max:300  },
+  { key:"ch",   label:"Calcium Hardness",  short:"CH",   unit:"ppm", chip:"#B48EE8", step:10,  min:0,  max:1000 },
+  { key:"cya",  label:"Stabilizer / CYA",  short:"CYA",  unit:"ppm", chip:"#F2954A", step:5,   min:0,  max:200  },
+  { key:"salt", label:"Salt",              short:"Salt", unit:"ppm", chip:"#5DC7E8", step:50,  min:0,  max:6000 },
+  { key:"temp", label:"Water Temp",        short:"Temp", unit:"°C", chip:"#8FB8BA", step:1, min:0, max:50, infoOnly:true },
+];
+
+const DEFAULT_TARGETS = {
+  fc:[3,5], cc:[0,0.5], ph:[7.2,7.8], ta:[60,90],
+  ch:[250,350], cya:[60,80], salt:[2700,3400], temp:[24,29],
+};
+
+const DEFAULT_PROFILE = {
+  name:"my pool", volumeL:77000, poolType:"saltwater",
+  chlorineBoost:"calhypo", calHypoPct:68, liquidChlorinePct:12,
+  phLowerMethod:"phminus", muriaticPct:31.45, targets:DEFAULT_TARGETS,
+};
+
+// ---- localStorage storage (replaces window.storage from Claude artifact) ----
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
+}
+function saveJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch { return false; }
+}
+
+// ---- helpers ----
+function uid() { return Math.random().toString(36).slice(2, 10); }
+function fmt(n, d=1) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return (Math.round(n * 10**d) / 10**d).toString();
+}
+
+// ---- dosing math ----
+function doseFCRaiseLiquid(delta, vol, pct) {
+  if (delta<=0) return null;
+  return { amount:(delta*vol/1000)/(pct/100), unit:"mL", label:`${fmt(pct,1)}% liquid chlorine` };
+}
+function doseFCRaiseCalHypo(delta, vol, pct) {
+  if (delta<=0) return null;
+  return { amount:(delta*vol/1000)/(pct/100), unit:"g", label:`cal-hypo shock (${fmt(pct,0)}%)` };
+}
+function dosePHRaise(delta, vol) {
+  if (delta<=0) return null;
+  return { amount:delta*(vol/1000)*22.5, unit:"g", label:"soda ash" };
+}
+function dosePHLowerMuriatic(delta, vol, pct) {
+  if (delta<=0) return null;
+  return { amount:delta*(vol/1000)*46.9*(31.45/pct), unit:"mL", label:`${fmt(pct,2)}% muriatic acid` };
+}
+function dosePHLowerDryAcid(delta, vol) {
+  if (delta<=0) return null;
+  return { amount:delta*(vol/1000)*46.9*0.72, unit:"g", label:"pH Minus (sodium bisulfate)" };
+}
+function doseTARaise(delta, vol)  { return delta<=0?null:{ amount:delta*(vol/1000)*1.8, unit:"g", label:"baking soda" }; }
+function doseCHRaise(delta, vol)  { return delta<=0?null:{ amount:delta*(vol/1000)*1.5, unit:"g", label:"calcium chloride" }; }
+function doseCYARaise(delta, vol) { return delta<=0?null:{ amount:delta*(vol/1000)*1.0, unit:"g", label:"cyanuric acid (stabilizer)" }; }
+function doseSaltRaise(delta, vol){ return delta<=0?null:{ amount:delta*(vol/1000)*1.0, unit:"g", label:"pool salt (NaCl)" }; }
+
+function weightAmount(amount, unit) {
+  if (unit==="g"  && amount>=1000) return `${fmt(amount/1000,2)} kg`;
+  if (unit==="mL" && amount>=1000) return `${fmt(amount/1000,2)} L`;
+  return `${fmt(amount, amount<10?2:0)} ${unit}`;
+}
+
+function statusFor(key, value, targets) {
+  const t = targets[key];
+  if (value===undefined||value===null||value==="") return "none";
+  const v = parseFloat(value);
+  if (Number.isNaN(v)) return "none";
+  if (v<t[0]) return "low";
+  if (v>t[1]) return "high";
+  return "good";
+}
+
+function recommendation(def, value, targets, profile) {
+  if (def.infoOnly) return null;
+  const t = targets[def.key];
+  const status = statusFor(def.key, value, targets);
+  if (status==="none"||status==="good") return null;
+  const v = parseFloat(value);
+  const isSWG = profile.poolType === "saltwater";
+
+  if (def.key==="fc") {
+    const target = t[1];
+    const base = isSWG
+      ? "Bump your SWG output % (or run time) to raise chlorine production."
+      : "Check your chlorinator output and run time.";
+    if (status==="low") {
+      if (profile.chlorineBoost==="pucks")
+        return { text:`${base} Pucks feed slowly — keep a shock on hand if you need chlorine fast.` };
+      if (profile.chlorineBoost==="liquid") {
+        const d = doseFCRaiseLiquid(target-v, profile.volumeL, profile.liquidChlorinePct);
+        return { text:d?`${base} For a same-day boost: ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ${fmt(target)} ppm.`:base };
+      }
+      const d = doseFCRaiseCalHypo(target-v, profile.volumeL, profile.calHypoPct);
+      return { text:d?`${base} For a same-day boost: ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ${fmt(target)} ppm.`:base };
+    }
+    return { text:isSWG?"Above target — ease off the SWG output % for a bit; it’ll drift down on its own"
+                       :"Above target — reduce chlorinator output; it’ll drift down on its own" };
+  }
+  if (def.key==="cc") {
+    if (v>t[1]) return { text:"Combined chlorine is climbing — a shock (superchlorinate) is usually the fix" };
+    return null;
+  }
+  if (def.key==="ph") {
+    const target = (t[0]+t[1])/2;
+    if (status==="low") {
+      const d = dosePHRaise(target-v, profile.volumeL);
+      return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ~${fmt(target,1)}` }:null;
+    }
+    if (profile.phLowerMethod==="muriatic") {
+      const d = dosePHLowerMuriatic(v-target, profile.volumeL, profile.muriaticPct);
+      return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ~${fmt(target,1)}` }:null;
+    }
+    const d = dosePHLowerDryAcid(v-target, profile.volumeL);
+    return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ~${fmt(target,1)}. Dose in steps and retest — dry acid is an estimate (±20%); check your bag’s chart if it differs.` }:null;
+  }
+  if (def.key==="ta") {
+    if (status==="low") {
+      const d = doseTARaise(t[1]-v, profile.volumeL);
+      return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ${fmt(t[1])} ppm` }:null;
+    }
+    return { text:"Above target — dilute with fresh water over time to bring it down" };
+  }
+  if (def.key==="ch") {
+    if (status==="low") {
+      const d = doseCHRaise(t[0]-v, profile.volumeL);
+      return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ${fmt(t[0])} ppm` }:null;
+    }
+    return { text:"Above target — dilution is the only real fix" };
+  }
+  if (def.key==="cya") {
+    if (status==="low") {
+      const d = doseCYARaise(t[0]-v, profile.volumeL);
+      return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ${fmt(t[0])} ppm` }:null;
+    }
+    return { text:"Above target — dilute with fresh water to bring it down" };
+  }
+  if (def.key==="salt") {
+    if (status==="low") {
+      const d = doseSaltRaise(t[1]-v, profile.volumeL);
+      return d?{ text:`Add ${weightAmount(d.amount,d.unit)} of ${d.label} to reach ${fmt(t[1])} ppm` }:null;
+    }
+    return { text:"Above target — dilute with fresh water to bring it down" };
+  }
+  return null;
+}
+
+// ---- validation ----
+function validateForm(form) {
+  const errors = {};
+  for (const def of PARAM_DEFS) {
+    const raw = form[def.key];
+    if (raw===undefined||raw==="") continue;
+    const v = parseFloat(raw);
+    if (Number.isNaN(v)) { errors[def.key]=`${def.short}: not a number`; continue; }
+    if (v<def.min||v>def.max) errors[def.key]=`${def.short} should be ${def.min}–${def.max}${def.unit?" "+def.unit:""}`;
+  }
+  return errors;
+}
+
+// ---- toast ----
+function useToast() {
+  const [toast, setToast] = useState(null);
+  const show = (msg, type="ok") => {
+    setToast({ msg, type, id: Math.random() });
+    setTimeout(() => setToast(null), 2800);
+  };
+  return [toast, show];
+}
+
+function Toast({ toast }) {
+  if (!toast) return null;
+  return React.createElement("div", {
+    className:"pd-toast",
+    style:{
+      position:"fixed", bottom:80, left:"50%", transform:"translateX(-50%)",
+      background:toast.type==="ok"?C.goodBg:C.dangerBg,
+      border:`1px solid ${toast.type==="ok"?C.goodBorder:C.dangerBorder}`,
+      borderRadius:10, padding:"8px 14px", display:"flex", alignItems:"center", gap:8,
+      fontSize:12.5, color:C.text, zIndex:100, whiteSpace:"nowrap",
+      boxShadow:"0 4px 16px rgba(0,0,0,0.4)",
+    }
+  },
+    toast.type==="ok"
+      ? React.createElement(CheckCircle2, { size:14, color:C.accent })
+      : React.createElement(AlertTriangle, { size:14, color:C.danger }),
+    toast.msg
+  );
+}
+
+// ---- App ----
+function App() {
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
+  const [tests, setTests]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab]         = useState("overview");
+  const [showForm, setShowForm]       = useState(false);
+  const [form, setForm]               = useState({});
+  const [formErrors, setFormErrors]   = useState({});
+  const [chartParam, setChartParam]   = useState("fc");
+  const [settingsDraft, setSettingsDraft] = useState(null);
+  const [toast, showToast] = useToast();
+
+  useEffect(() => {
+    const p = loadJSON("pool-profile", DEFAULT_PROFILE);
+    const t = loadJSON("pool-tests", []);
+    setProfile({ ...DEFAULT_PROFILE, ...p, targets:{ ...DEFAULT_TARGETS, ...(p.targets||{}) } });
+    setTests(t);
+    setLoading(false);
+  }, []);
+
+  const latest = tests.length ? tests[tests.length-1] : null;
+
+  const alerts = useMemo(() => {
+    if (!latest) return [];
+    return PARAM_DEFS.filter(d=>!d.infoOnly).map(d=>({
+      def:d, status:statusFor(d.key,latest[d.key],profile.targets)
+    })).filter(a=>a.status==="low"||a.status==="high");
+  }, [latest, profile.targets]);
+
+  function persistTests(next) {
+    setTests(next);
+    const ok = saveJSON("pool-tests", next);
+    showToast(ok?"Test saved":"Save failed — check storage",ok?"ok":"err");
+  }
+  function persistProfile(next) {
+    setProfile(next);
+    const ok = saveJSON("pool-profile", next);
+    showToast(ok?"Settings saved":"Save failed — check storage",ok?"ok":"err");
+  }
+
+  function openNewTest() {
+    setForm({ date: new Date().toISOString().slice(0,16) });
+    setFormErrors({});
+    setShowForm(true);
+  }
+
+  function submitTest(e) {
+    e.preventDefault();
+    const errors = validateForm(form);
+    if (Object.keys(errors).length>0) { setFormErrors(errors); return; }
+    const entry = { id:uid(), ...form };
+    const next  = [...tests, entry].sort((a,b)=>new Date(a.date)-new Date(b.date));
+    persistTests(next);
+    setShowForm(false); setForm({}); setFormErrors({}); setTab("overview");
+  }
+
+  function deleteTest(id) {
+    const next = tests.filter(t=>t.id!==id);
+    setTests(next);
+    const ok = saveJSON("pool-tests", next);
+    if (!ok) showToast("Delete failed — check storage","err");
+  }
+
+  function openSettings() {
+    setSettingsDraft(JSON.parse(JSON.stringify(profile)));
+    setTab("settings");
+  }
+  function saveSettings() {
+    persistProfile(settingsDraft);
+    setTab("overview");
+  }
+
+  const chartDef  = PARAM_DEFS.find(d=>d.key===chartParam);
+  const chartData = tests
+    .filter(t=>t[chartParam]!==undefined&&t[chartParam]!=="")
+    .map(t=>({
+      date: new Date(t.date).toLocaleDateString(undefined,{month:"short",day:"numeric"}),
+      value: parseFloat(t[chartParam]),
+    }));
+
+  const h = React.createElement;
+
+  return h("div", { style:{ fontFamily:FONT_BODY, background:C.bg, color:C.text, minHeight:"100vh" } },
+    h("style", null, GLOBAL_CSS),
+    h(Toast, { toast }),
+
+    showForm
+      ? h(TestForm, { form, setForm, formErrors, setFormErrors, onSubmit:submitTest,
+          onClose:()=>{ setShowForm(false); setFormErrors({}); } })
+      : h(React.Fragment, null,
+
+          // header
+          h("div", { className:"sticky top-0 z-20", style:{ background:C.bg, borderBottom:`1px solid ${C.border}`, padding:"24px 20px 16px" } },
+            h("div", { className:"flex items-center justify-between" },
+              h("div", { className:"flex items-center gap-3" },
+                h("div", { className:"flex items-center justify-center shrink-0",
+                    style:{ width:36,height:36,borderRadius:999,background:C.card,border:`1px solid ${C.border}` } },
+                  h(Waves, { size:18, color:C.accent })
+                ),
+                h("div", null,
+                  h("div", { style:{ fontFamily:FONT_DISPLAY,fontSize:17,fontWeight:600,lineHeight:1.15 } }, profile.name),
+                  h("div", { style:{ fontFamily:FONT_MONO,fontSize:11,color:C.faint,lineHeight:1.3 } },
+                    `${profile.volumeL.toLocaleString()} L · ${profile.poolType==="saltwater"?"saltwater":"traditional chlorine"}`
+                  )
+                )
+              ),
+              h("button", { onClick:openSettings, className:"pd-icon-btn", style:{ width:36,height:36,borderRadius:999 } },
+                h(Settings2, { size:18, color:C.faint })
+              )
+            )
+          ),
+
+          // content
+          h("div", { className:"max-w-md mx-auto", style:{ padding:"16px 20px 110px" } },
+            loading && h("div", { style:{ textAlign:"center",color:C.faint,padding:"64px 0",fontSize:14 } }, "loading your pool…"),
+            !loading && tab==="overview"  && h(Overview, { profile,latest,alerts,tests }),
+            !loading && tab==="timeline"  && h(Timeline, { tests,chartParam,setChartParam,chartDef,chartData,profile,onDelete:deleteTest }),
+            !loading && tab==="settings" && settingsDraft && h(SettingsPanel, { draft:settingsDraft,setDraft:setSettingsDraft,onSave:saveSettings,onCancel:()=>setTab("overview") }),
+          ),
+
+          // nav bar
+          h("div", { className:"sticky bottom-0 max-w-md mx-auto",
+              style:{ background:C.bg, borderTop:`1px solid ${C.border}`, padding:"10px 20px" } },
+            h("div", { className:"flex items-center justify-between" },
+              h(NavButton, { active:tab==="overview", onClick:()=>setTab("overview"),
+                  icon:h(Droplets,{size:18}), label:"Overview" }),
+              h("button", { onClick:openNewTest, className:"flex items-center justify-center pd-btn-primary",
+                  style:{ width:48,height:48,borderRadius:999,background:C.accent,marginTop:-24,
+                          boxShadow:`0 8px 20px ${C.accent}33` } },
+                h(Plus, { size:22, color:C.bg, strokeWidth:2.5 })
+              ),
+              h(NavButton, { active:tab==="timeline", onClick:()=>setTab("timeline"),
+                  icon:h(ListPlus,{size:18}), label:"Timeline" }),
+            )
+          )
+        )
+  );
+}
+
+function NavButton({ active, onClick, icon, label }) {
+  const color = active ? C.accent : C.faint;
+  return React.createElement("button", {
+    onClick, className:"flex flex-col items-center gap-1", style:{ padding:"4px 16px" }
+  },
+    React.createElement("span", { style:{ color } }, icon),
+    React.createElement("span", { style:{ fontSize:10, color } }, label)
+  );
+}
+
+function Overview({ profile, latest, alerts, tests }) {
+  const h = React.createElement;
+  if (!tests.length) return h("div", { style:{ marginTop:40,textAlign:"center" } },
+    h(FlaskConical, { size:32, color:"#3D6367", style:{ margin:"0 auto 12px" } }),
+    h("div", { style:{ fontFamily:FONT_DISPLAY,fontSize:15,marginBottom:4 } }, "No tests logged yet"),
+    h("div", { style:{ fontSize:13,color:C.faint } }, "Tap the + button to log your first water test.")
+  );
+
+  return h("div", null,
+    alerts.length>0
+      ? h("div", { style:{ marginBottom:16,borderRadius:16,background:C.dangerBg,border:`1px solid ${C.dangerBorder}`,padding:"12px 14px" } },
+          alerts.map(a => h("div", { key:a.def.key, className:"flex items-start gap-2", style:{ padding:"4px 0" } },
+            h(AlertTriangle, { size:15, color:C.danger, style:{ marginTop:2,flexShrink:0 } }),
+            h("div", { style:{ fontSize:13,lineHeight:1.4 } },
+              h("span", { style:{ fontWeight:500 } }, a.def.label), " ",
+              h("span", { style:{ color:"#D99" } }, `is ${a.status==="low"?"below":"above"} target`)
+            )
+          ))
+        )
+      : h("div", { className:"flex items-center gap-2", style:{ marginBottom:16,borderRadius:16,background:C.goodBg,border:`1px solid ${C.goodBorder}`,padding:"12px 14px" } },
+          h(CheckCircle2, { size:16, color:C.accent }),
+          h("span", { style:{ fontSize:13 } }, "Everything’s in range")
+        ),
+
+    h("div", { style:{ fontFamily:FONT_MONO,fontSize:11,color:C.faint,marginBottom:8,padding:"0 4px" } },
+      `LATEST — ${new Date(latest.date).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}`
+    ),
+    h("div", { className:"flex flex-col", style:{ gap:10 } },
+      PARAM_DEFS.map(def => h(ParamCard, { key:def.key, def, value:latest[def.key], profileArg:profile }))
+    )
+  );
+}
+
+function ParamCard({ def, value, profileArg }) {
+  const h = React.createElement;
+  const targets = profileArg.targets;
+  const status  = statusFor(def.key, value, targets);
+  const rec     = recommendation(def, value, targets, profileArg);
+  const t       = targets[def.key];
+  const statusColor = { good:C.accent, low:C.danger, high:C.danger, none:"#3D6367" }[status];
+
+  return h("div", { style:{ borderRadius:16,background:C.card,border:`1px solid ${C.border}`,padding:"14px 16px" } },
+    h("div", { className:"flex items-center justify-between" },
+      h("div", { className:"flex items-center gap-3" },
+        h("span", { style:{ width:12,height:12,borderRadius:999,background:def.chip,flexShrink:0,
+            boxShadow:value!==undefined&&value!==""?`0 0 0 3px ${def.chip}22`:"none" } }),
+        h("div", null,
+          h("div", { style:{ fontSize:13.5,fontWeight:500 } }, def.label),
+          h("div", { style:{ fontFamily:FONT_MONO,fontSize:10.5,color:C.faint } },
+            `target ${t[0]}–${t[1]}${def.unit?` ${def.unit}`:""}`
+          )
+        )
+      ),
+      h("div", { style:{ fontFamily:FONT_MONO,color:statusColor,fontSize:18,fontWeight:600,lineHeight:1 } },
+        value===undefined||value===""?"—":`${value}${def.unit?` ${def.unit}`:""}`
+      )
+    ),
+    rec && h("div", { style:{ marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`,fontSize:12.5,color:"#B9DADA",lineHeight:1.4 } },
+      rec.text
+    )
+  );
+}
+
+function Timeline({ tests, chartParam, setChartParam, chartDef, chartData, profile, onDelete }) {
+  const h = React.createElement;
+  const t = profile.targets[chartParam];
+  return h("div", null,
+    // param pills
+    h("div", { className:"flex", style:{ gap:6,overflowX:"auto",paddingBottom:12 } },
+      PARAM_DEFS.map(d => {
+        const active = chartParam===d.key;
+        return h("button", { key:d.key, onClick:()=>setChartParam(d.key), className:"pd-pill shrink-0",
+            style:{ padding:"6px 12px",borderRadius:999,fontSize:12,
+                    border:`1px solid ${active?d.chip:C.border}`,
+                    background:active?`${d.chip}22`:"transparent", color:active?C.text:C.faint } },
+          d.short
+        );
+      })
+    ),
+    // chart
+    h("div", { style:{ borderRadius:16,background:C.card,border:`1px solid ${C.border}`,padding:12,marginBottom:20,height:200 } },
+      chartData.length>1
+        ? h(ResponsiveContainer, { width:"100%", height:"100%" },
+            h(LineChart, { data:chartData, margin:{ top:8,right:8,left:-20,bottom:0 } },
+              h(CartesianGrid, { stroke:C.border, strokeDasharray:"3 3", vertical:false }),
+              t && h(ReferenceArea, { y1:t[0], y2:t[1], fill:chartDef.chip, fillOpacity:0.08 }),
+              h(XAxis, { dataKey:"date", tick:{ fill:C.faint,fontSize:10 }, axisLine:{ stroke:C.border }, tickLine:false }),
+              h(YAxis, { tick:{ fill:C.faint,fontSize:10 }, axisLine:false, tickLine:false, width:34 }),
+              h(Tooltip, { contentStyle:{ background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12 }, labelStyle:{ color:C.text } }),
+              h(Line, { type:"monotone", dataKey:"value", stroke:chartDef.chip, strokeWidth:2, dot:{ r:3,fill:chartDef.chip } })
+            )
+          )
+        : h("div", { className:"flex items-center justify-center", style:{ height:"100%",fontSize:12.5,color:C.faint } },
+            `Log a couple more ${chartDef.label.toLowerCase()} tests to see a trend`
+          )
+    ),
+    // test list
+    h("div", { style:{ fontFamily:FONT_MONO,fontSize:11,color:C.faint,marginBottom:8,padding:"0 4px" } }, `ALL TESTS (${tests.length})`),
+    h("div", { className:"flex flex-col", style:{ gap:8 } },
+      [...tests].reverse().map(tst =>
+        h("div", { key:tst.id, style:{ borderRadius:12,background:C.card,border:`1px solid ${C.border}`,padding:"12px 14px" } },
+          h("div", { className:"flex items-center justify-between", style:{ marginBottom:6 } },
+            h("span", { style:{ fontFamily:FONT_MONO,fontSize:12,color:"#9FC2C4" } },
+              new Date(tst.date).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
+            ),
+            h("button", { onClick:()=>onDelete(tst.id), className:"pd-delete", style:{ color:C.faint,background:"none",border:"none" } },
+              h(Trash2, { size:14 })
+            )
+          ),
+          h("div", { className:"flex flex-wrap", style:{ gap:"4px 12px" } },
+            PARAM_DEFS.filter(d=>tst[d.key]!==undefined&&tst[d.key]!=="").map(d =>
+              h("span", { key:d.key, style:{ fontSize:12 } },
+                h("span", { style:{ color:C.faint } }, `${d.short} `),
+                h("span", { style:{ fontFamily:FONT_MONO } }, tst[d.key])
+              )
+            )
+          ),
+          tst.notes && h("div", { style:{ fontSize:12,color:C.muted,marginTop:6,fontStyle:"italic" } }, tst.notes)
+        )
+      ),
+      tests.length===0 && h("div", { style:{ textAlign:"center",fontSize:13,color:C.faint,padding:"40px 0" } }, "No tests yet")
+    )
+  );
+}
+
+function TestForm({ form, setForm, formErrors, setFormErrors, onSubmit, onClose }) {
+  const h = React.createElement;
+  function update(key, val) {
+    setForm(f=>({ ...f, [key]:val }));
+    if (formErrors[key]) setFormErrors(e=>{ const n={...e}; delete n[key]; return n; });
+  }
+  const inputStyle = { width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",fontSize:14,color:C.text };
+  const hasErrors  = Object.keys(formErrors).length>0;
+
+  return h("div", { style:{ minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column" } },
+    h("div", { className:"flex items-center justify-between", style:{ padding:"24px 20px 16px",borderBottom:`1px solid ${C.border}` } },
+      h("div", { style:{ fontFamily:FONT_DISPLAY,fontSize:17,fontWeight:600 } }, "New test"),
+      h("button", { onClick:onClose, className:"pd-icon-btn flex items-center justify-center", style:{ width:32,height:32,borderRadius:999 } },
+        h(X, { size:18, color:C.faint })
+      )
+    ),
+    h("form", { onSubmit, className:"max-w-md mx-auto w-full", style:{ flex:1,overflowY:"auto",padding:"16px 20px" } },
+      h("label", { style:{ display:"block",fontSize:12,color:C.muted,marginBottom:6 } }, "Date & time"),
+      h("input", { type:"datetime-local", value:form.date||"", onChange:e=>update("date",e.target.value),
+          required:true, className:"pd-input",
+          style:{ ...inputStyle,marginBottom:16,fontFamily:FONT_MONO } }),
+
+      hasErrors && h("div", { style:{ marginBottom:12,borderRadius:10,background:C.dangerBg,border:`1px solid ${C.dangerBorder}`,padding:"10px 14px" } },
+        Object.values(formErrors).map((msg,i)=>
+          h("div", { key:i, className:"flex items-center gap-2", style:{ fontSize:12,color:C.danger,padding:"2px 0" } },
+            h(AlertTriangle, { size:12 }), msg
+          )
+        )
+      ),
+
+      h("div", { className:"grid grid-cols-2", style:{ gap:12,marginBottom:16 } },
+        PARAM_DEFS.map(d => {
+          const hasErr = !!formErrors[d.key];
+          return h("div", { key:d.key },
+            h("label", { className:"flex items-center gap-2", style:{ fontSize:12,color:hasErr?C.danger:C.muted,marginBottom:6 } },
+              h("span", { style:{ width:8,height:8,borderRadius:999,background:d.chip } }),
+              `${d.short}${d.unit?` (${d.unit})`:""}`
+            ),
+            h("input", { type:"number", step:d.step, min:d.min, max:d.max,
+                value:form[d.key]??"", onChange:e=>update(d.key,e.target.value),
+                placeholder:"—", className:"pd-input",
+                style:{ ...inputStyle, fontFamily:FONT_MONO, borderColor:hasErr?C.danger:C.border } })
+          );
+        })
+      ),
+
+      h("label", { style:{ display:"block",fontSize:12,color:C.muted,marginBottom:6 } }, "Notes"),
+      h("textarea", { value:form.notes||"", onChange:e=>update("notes",e.target.value),
+          rows:2, placeholder:"Anything worth remembering…", className:"pd-input",
+          style:{ ...inputStyle,marginBottom:24,resize:"none" } }),
+
+      h("button", { type:"submit", className:"pd-btn-primary",
+          style:{ width:"100%",background:C.accent,color:C.bg,fontWeight:600,borderRadius:12,padding:12,fontSize:14,border:"none" } },
+        "Save test"
+      )
+    )
+  );
+}
+
+function SettingsPanel({ draft, setDraft, onSave, onCancel }) {
+  const h = React.createElement;
+  function updateTarget(key, idx, val) {
+    setDraft(d=>{ const targets={...d.targets}; const pair=[...targets[key]]; pair[idx]=parseFloat(val); targets[key]=pair; return {...d,targets}; });
+  }
+  const inputStyle = { width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",fontSize:14,color:C.text };
+  const labelStyle = { display:"block",fontSize:12,color:C.muted,marginBottom:6 };
+
+  function PillGroup({ sectionLabel, options, value, onChange }) {
+    return h(React.Fragment, null,
+      h("div", { style:{ fontFamily:FONT_MONO,fontSize:11,color:C.faint,marginBottom:8 } }, sectionLabel),
+      h("div", { className:"flex", style:{ gap:6,marginBottom:10 } },
+        options.map(opt => {
+          const active = value===opt.key;
+          return h("button", { key:opt.key, onClick:()=>onChange(opt.key), className:"pd-pill",
+              style:{ flex:1,padding:"8px 6px",borderRadius:10,fontSize:12,textAlign:"center",
+                      border:`1px solid ${active?C.accent:C.border}`,
+                      background:active?`${C.accent}1A`:"transparent", color:active?C.text:C.muted } },
+            opt.label
+          );
+        })
+      )
+    );
+  }
+
+  return h("div", null,
+    h("div", { style:{ fontFamily:FONT_DISPLAY,fontSize:15,fontWeight:600,marginBottom:16 } }, "Pool settings"),
+
+    h("label", { style:labelStyle }, "Pool name"),
+    h("input", { value:draft.name, onChange:e=>setDraft({...draft,name:e.target.value}),
+        className:"pd-input", style:{ ...inputStyle,marginBottom:16 } }),
+
+    h("label", { style:labelStyle }, "Volume (litres)"),
+    h("input", { type:"number", value:draft.volumeL, onChange:e=>setDraft({...draft,volumeL:parseFloat(e.target.value)||0}),
+        className:"pd-input", style:{ ...inputStyle,marginBottom:16,fontFamily:FONT_MONO } }),
+
+    h(PillGroup, { sectionLabel:"POOL TYPE",
+        options:[{key:"saltwater",label:"Saltwater (SWG)"},{key:"traditional",label:"Traditional Chlorine"}],
+        value:draft.poolType, onChange:v=>setDraft({...draft,poolType:v}) }),
+    h("div", { style:{ marginBottom:12 } }),
+
+    h(PillGroup, { sectionLabel:"CHLORINE — BACKUP / TOP-UP",
+        options:[{key:"calhypo",label:"Cal-Hypo Shock"},{key:"pucks",label:"Chlorine Pucks"},{key:"liquid",label:"Liquid Chlorine"}],
+        value:draft.chlorineBoost, onChange:v=>setDraft({...draft,chlorineBoost:v}) }),
+
+    draft.chlorineBoost==="calhypo" && h("div", { style:{ marginBottom:20 } },
+      h("label", { style:labelStyle }, "Cal-hypo available chlorine %"),
+      h("input", { type:"number", value:draft.calHypoPct, onChange:e=>setDraft({...draft,calHypoPct:parseFloat(e.target.value)||0}),
+          className:"pd-input", style:{ ...inputStyle,fontFamily:FONT_MONO } })
+    ),
+    draft.chlorineBoost==="liquid" && h("div", { style:{ marginBottom:20 } },
+      h("label", { style:labelStyle }, "Liquid chlorine %"),
+      h("input", { type:"number", value:draft.liquidChlorinePct, onChange:e=>setDraft({...draft,liquidChlorinePct:parseFloat(e.target.value)||0}),
+          className:"pd-input", style:{ ...inputStyle,fontFamily:FONT_MONO } })
+    ),
+    draft.chlorineBoost==="pucks" && h("div", { style:{ fontSize:12,color:C.faint,marginBottom:20,lineHeight:1.4 } },
+      "Pucks dissolve slowly — keep a shock around for fast bumps."
+    ),
+
+    h(PillGroup, { sectionLabel:"LOWERING PH",
+        options:[{key:"phminus",label:"pH Minus (dry acid)"},{key:"muriatic",label:"Muriatic Acid (liquid)"}],
+        value:draft.phLowerMethod, onChange:v=>setDraft({...draft,phLowerMethod:v}) }),
+
+    draft.phLowerMethod==="muriatic" && h("div", { style:{ marginBottom:20 } },
+      h("label", { style:labelStyle }, "Muriatic acid %"),
+      h("input", { type:"number", value:draft.muriaticPct, onChange:e=>setDraft({...draft,muriaticPct:parseFloat(e.target.value)||0}),
+          className:"pd-input", style:{ ...inputStyle,fontFamily:FONT_MONO } })
+    ),
+    draft.phLowerMethod==="phminus" && h("div", { style:{ fontSize:12,color:C.faint,marginBottom:20,lineHeight:1.4 } },
+      "Dosing uses standard dry-acid-to-muriatic conversion (±20%) — dose in steps and retest."
+    ),
+
+    h("div", { style:{ fontFamily:FONT_MONO,fontSize:11,color:C.faint,marginBottom:8 } }, "TARGET RANGES"),
+    h("div", { className:"flex flex-col", style:{ gap:10,marginBottom:24 } },
+      PARAM_DEFS.map(d =>
+        h("div", { key:d.key, className:"flex items-center gap-3" },
+          h("span", { style:{ width:8,height:8,borderRadius:999,background:d.chip,flexShrink:0 } }),
+          h("span", { style:{ fontSize:13,width:128,flexShrink:0 } }, d.label),
+          h("input", { type:"number", value:draft.targets[d.key][0], onChange:e=>updateTarget(d.key,0,e.target.value),
+              className:"pd-input", style:{ ...inputStyle,borderRadius:8,padding:"6px 10px",fontFamily:FONT_MONO } }),
+          h("span", { style:{ color:C.faint } }, "–"),
+          h("input", { type:"number", value:draft.targets[d.key][1], onChange:e=>updateTarget(d.key,1,e.target.value),
+              className:"pd-input", style:{ ...inputStyle,borderRadius:8,padding:"6px 10px",fontFamily:FONT_MONO } })
+        )
+      )
+    ),
+
+    h("div", { className:"flex gap-3", style:{ marginBottom:24 } },
+      h("button", { onClick:onCancel, style:{ flex:1,border:`1px solid ${C.border}`,borderRadius:12,padding:12,fontSize:14,color:C.muted,background:"none" } }, "Cancel"),
+      h("button", { onClick:onSave, className:"pd-btn-primary", style:{ flex:1,background:C.accent,color:C.bg,fontWeight:600,borderRadius:12,padding:12,fontSize:14,border:"none" } }, "Save")
+    ),
+
+    h("div", { className:"flex items-start gap-2", style:{ fontSize:11,color:C.faint,lineHeight:1.5,paddingBottom:16 } },
+      h(ChevronRight, { size:13, style:{ marginTop:2,flexShrink:0 } }),
+      "Target ranges are standard guidelines — salt and CYA vary by SWG brand, check your chlorinator’s manual. Dose in steps, retest, especially pH and TA."
+    )
+  );
+}
+
+// ---- mount ----
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+
+// ---- service worker ----
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
