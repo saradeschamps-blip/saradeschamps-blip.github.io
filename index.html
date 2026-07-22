@@ -403,7 +403,7 @@ function TestForm({ form, setForm, formErrors, setFormErrors, onSubmit, onClose 
                   <span style={{ width:8, height:8, borderRadius:999, background:d.chip, display:"inline-block" }} />
                   {d.short}{d.unit?` (${d.unit})`:""}
                 </label>
-                <input type="number" step={d.step} min={d.min} max={d.max}
+                <input type="number" step="any" min={d.min} max={d.max}
                   value={form[d.key]??""} onChange={e=>update(d.key,e.target.value)}
                   placeholder="—" className="pd-input"
                   style={{ ...inputStyle, fontFamily:FONT_MONO, borderColor:hasErr?C.danger:C.border }} />
