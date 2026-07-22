@@ -1,4 +1,4 @@
-const CACHE = "pool-tracker-v3";
+const CACHE = "pool-tracker-v4";
 // Only cache same-origin assets — CDN URLs are cross-origin and will fail addAll
 const ASSETS = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
