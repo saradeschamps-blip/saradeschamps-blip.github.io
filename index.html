@@ -463,7 +463,88 @@ function TestForm({ form, setForm, formErrors, setFormErrors, onSubmit, onClose 
   );
 }
 
-function SettingsPanel({ draft, setDraft, onSave, onCancel }) {
+const HELP_SECTIONS = [
+  { title:"Pool setup & settings", body:`Open Settings (sliders icon, top right) to configure:
+
+• Pool name — just a label for display.
+• Volume — your pool's water volume in litres. Dosing suggestions depend on this, so try to be accurate.
+• Pool type — Saltwater (SWG) or Traditional Chlorine. This affects which parameters are shown and how dosing is calculated.
+• Chlorine top-up method — how you manually boost chlorine (Cal-Hypo, liquid, or pucks). Enter the concentration % if prompted.
+• pH lowering — pH Minus (dry acid) or Muriatic (liquid acid).
+• Target ranges — defaults are standard guidelines. SWG pools often need different CYA and salt targets — check your chlorinator manual.` },
+  { title:"Understanding the parameters", body:`FC (Free Chlorine) — the active sanitiser. Keep it in range; too low risks algae, too high can irritate skin.
+CC (Combined Chlorine) — used-up chlorine. Should stay near 0; high CC means you need to shock.
+pH — acidity. Too low corrodes equipment; too high reduces chlorine effectiveness.
+TA (Total Alkalinity) — buffers pH swings. Adjust before trying to fix pH.
+CH (Calcium Hardness) — low CH causes foaming; high CH causes scaling.
+CYA (Stabilizer) — protects FC from UV. SWG pools need higher CYA than traditional pools.
+Salt — SWG pools only. Must be in the range your chlorinator requires.
+Temp — informational only; affects how fast chemicals deplete.` },
+  { title:"Reading the overview", body:`After logging a test, Overview shows your latest readings as cards. Each card has a coloured status dot:
+• Green — in your target range.
+• Yellow / Red — below or above target. An alert banner also appears at the top.
+
+Tap Timeline to see trends over time and chart any parameter.
+
+Dosing suggestions appear on alert cards — they're estimates, so always dose in steps and retest.` },
+  { title:"Your data & privacy", body:`All your test data is stored locally in your browser (localStorage). Nothing is sent to any server and no account is needed — only you can see your data.
+
+Important: clearing your browser's site data or history will permanently delete your tests. Use the Export button in Settings to save a backup regularly.
+
+Data is per-device and per-browser — your phone and computer have separate copies. Use Export + Import to move data between devices.` },
+  { title:"Tips for accurate testing", body:`• Test at the same time of day — morning before the sun hits is ideal.
+• Collect your sample away from return jets, at elbow depth.
+• Wait at least 30 minutes after adding chemicals before retesting.
+• Rinse your test kit cells with pool water before filling.
+• FC drops fast on hot sunny days — test more often in summer.` },
+];
+
+function HelpAccordion() {
+  const [open, setOpen] = useState(null);
+  return (
+    <div style={{ marginBottom:24 }}>
+      <div style={{ fontFamily:FONT_MONO, fontSize:11, color:C.faint, marginBottom:10 }}>HELP & INFO</div>
+      {HELP_SECTIONS.map((s, i) => (
+        <div key={i} style={{ borderRadius:12, background:C.card, border:`1px solid ${C.border}`, marginBottom:8, overflow:"hidden" }}>
+          <button onClick={() => setOpen(open===i ? null : i)}
+            style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+              padding:"12px 14px", background:"none", border:"none", color:C.text, fontSize:13, fontWeight:500, textAlign:"left", cursor:"pointer" }}>
+            {s.title}
+            <ChevronRight size={14} color={C.faint} style={{ transform:open===i?"rotate(90deg)":"none", transition:"transform 0.15s", flexShrink:0 }} />
+          </button>
+          {open===i && (
+            <div style={{ padding:"0 14px 14px", fontSize:12, color:C.muted, lineHeight:1.7, whiteSpace:"pre-line" }}>
+              {s.body}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SettingsPanel({ draft, setDraft, onSave, onCancel, tests, onImportTests }) {
+  function exportData() {
+    const blob = new Blob([JSON.stringify({ tests, profile: draft }, null, 2)], { type:"application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `pool-data-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  function importData(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!Array.isArray(data.tests)) { alert("Invalid backup file."); return; }
+        onImportTests(data.tests);
+      } catch { alert("Could not read file."); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
   function updateTarget(key, idx, val) {
     setDraft(d => { const targets={...d.targets}; const pair=[...targets[key]]; pair[idx]=parseFloat(val); targets[key]=pair; return {...d,targets}; });
   }
@@ -569,9 +650,34 @@ function SettingsPanel({ draft, setDraft, onSave, onCancel }) {
         <button onClick={onSave} className="pd-btn-primary" style={{ flex:1, background:C.accent, color:C.bg, fontWeight:600, borderRadius:12, padding:12, fontSize:14, border:"none" }}>Save</button>
       </div>
 
-      <div style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:11, color:C.faint, lineHeight:1.5, paddingBottom:16 }}>
+      <div style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:11, color:C.faint, lineHeight:1.5, marginBottom:28 }}>
         <ChevronRight size={13} style={{ marginTop:2, flexShrink:0 }} />
         Target ranges are standard guidelines — salt and CYA vary by SWG brand, check your chlorinator's manual. Dose in steps, retest.
+      </div>
+
+      <div style={{ fontFamily:FONT_MONO, fontSize:11, color:C.faint, marginBottom:10 }}>DATA BACKUP</div>
+      <div style={{ borderRadius:12, background:C.card, border:`1px solid ${C.border}`, padding:"14px", marginBottom:24 }}>
+        <div style={{ fontSize:12, color:C.muted, lineHeight:1.6, marginBottom:14 }}>
+          Your data is stored in this browser only. Export a backup regularly — clearing browser data will erase your tests permanently.
+        </div>
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={exportData} className="pd-btn-primary"
+            style={{ flex:1, background:C.accent, color:C.bg, fontWeight:600, borderRadius:10, padding:"10px 0", fontSize:13, border:"none" }}>
+            Export backup
+          </button>
+          <label style={{ flex:1, borderRadius:10, padding:"10px 0", fontSize:13, border:`1px solid ${C.border}`,
+            color:C.muted, background:"none", textAlign:"center", cursor:"pointer" }}>
+            Import backup
+            <input type="file" accept=".json" onChange={importData} style={{ display:"none" }} />
+          </label>
+        </div>
+      </div>
+
+      <HelpAccordion />
+
+      <div style={{ textAlign:"center", fontSize:11, color:C.faint, paddingBottom:8, lineHeight:1.8 }}>
+        Made with love for clean pools.<br/>
+        <a href="mailto:sara.deschamps+pool@gmail.com" style={{ color:C.accent, textDecoration:"none" }}>sara.deschamps+pool@gmail.com</a>
       </div>
     </div>
   );
@@ -638,6 +744,13 @@ function App() {
   }
   function openSettings() { setSettingsDraft(JSON.parse(JSON.stringify(profile))); setTab("settings"); }
   function saveSettings()  { persistProfile(settingsDraft); setTab("overview"); }
+  function importTests(imported) {
+    const next = [...tests, ...imported]
+      .filter((t,i,a) => a.findIndex(x=>x.id===t.id)===i)
+      .sort((a,b)=>new Date(a.date)-new Date(b.date));
+    persistTests(next);
+    showToast(`Imported ${imported.length} tests`,"ok");
+  }
 
   const chartDef  = PARAM_DEFS.find(d=>d.key===chartParam);
   const chartData = tests
@@ -676,7 +789,7 @@ function App() {
               {loading && <div style={{ textAlign:"center", color:C.faint, padding:"64px 0", fontSize:14 }}>loading your pool…</div>}
               {!loading && tab==="overview"  && <Overview profile={profile} latest={latest} alerts={alerts} tests={tests} />}
               {!loading && tab==="timeline"  && <Timeline tests={tests} chartParam={chartParam} setChartParam={setChartParam} chartDef={chartDef} chartData={chartData} profile={profile} onDelete={deleteTest} />}
-              {!loading && tab==="settings" && settingsDraft && <SettingsPanel draft={settingsDraft} setDraft={setSettingsDraft} onSave={saveSettings} onCancel={()=>setTab("overview")} />}
+              {!loading && tab==="settings" && settingsDraft && <SettingsPanel draft={settingsDraft} setDraft={setSettingsDraft} onSave={saveSettings} onCancel={()=>setTab("overview")} tests={tests} onImportTests={importTests} />}
             </div>
 
             <div style={{ position:"sticky", bottom:0, maxWidth:448, margin:"0 auto", background:C.bg, borderTop:`1px solid ${C.border}`, padding:"10px 20px" }}>
