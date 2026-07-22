@@ -581,7 +581,7 @@ function App() {
   }
 
   function openNewTest() {
-    setForm({ date: new Date().toISOString().slice(0,16) });
+    const now = new Date(); setForm({ date: new Date(now - now.getTimezoneOffset()*60000).toISOString().slice(0,16) });
     setFormErrors({});
     setShowForm(true);
   }
