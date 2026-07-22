@@ -1,4 +1,4 @@
-const CACHE = "pool-tracker-v4";
+const CACHE = "pool-tracker-v5";
 // Only cache same-origin assets — CDN URLs are cross-origin and will fail addAll
 const ASSETS = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
@@ -28,7 +28,14 @@ self.addEventListener("fetch", (e) => {
     );
     return;
   }
-  // Local assets: cache first
+  // index.html: always network first so updates appear immediately
+  if (e.request.url.endsWith("/") || e.request.url.endsWith("/index.html")) {
+    e.respondWith(
+      fetch(e.request).catch(() => caches.match(e.request))
+    );
+    return;
+  }
+  // Other local assets: cache first
   e.respondWith(
     caches.match(e.request).then((cached) => cached || fetch(e.request))
   );
